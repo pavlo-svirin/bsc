@@ -1,18 +1,21 @@
 #include <stdio.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
+#include <math.h>
 
 #define ARRLEN 20
-#define VL 4
+#define VL 8
 
-//int32_t array[] = {3,7,17,8,5,2,1,9,5,4};
-int32_t array[ARRLEN]; 
+int32_t array[] = {5,13,55,35,84,58,42,76,78,2,86,3,33,64,63,76,61,93,64,21};
+//int32_t array[ARRLEN]; 
 
 void quicksort_vectorized(int*, int, int);
 int partition_vectorized(int*, int, int);
 void print_array(int32_t*, int);
+void fprint_array(FILE*, int32_t*, int);
 void print_mask(__epi_8xi1 mask, int arrlen);
 void print_epi_8xi32(__epi_8xi32 epi, int gvl);
 
@@ -25,27 +28,29 @@ int store_arrays(int *address, unsigned int lo, unsigned int hi, __epi_8xi32 vec
 
 void vswap(int32_t *address,
 		__epi_8xi32 a1, __epi_8xi32 a2,
-	       	__epi_8xi32 b1,  __epi_8xi32 b2,
 		unsigned int lo, unsigned int j, 
 		unsigned  int num_to_swap1,
-		unsigned  int num_to_swap2,
 		unsigned int vector_length);
 
-__epi_8xi32 __builtin_epi_vcompress_8xi32__(__epi_8xi32 a, __epi_8xi1 mask, unsigned long int gvl);
+//__epi_8xi32 __builtin_epi_vcompress_8xi32__(__epi_8xi32 a, __epi_8xi1 mask, unsigned long int gvl);
 
 
 
 void generate_array(int32_t *addr, unsigned int arrlen){
+    srand(time(NULL));
     for(int i=0; i<arrlen; i++)
-        *(addr+i) = (double)rand()/(double)RAND_MAX*100;
+        *(addr+i) = (double)rand()/(double)RAND_MAX*100+1;
 }
 
 
 
 int main(){
     //quicksort(array, 0, ARRLEN-1);
-    generate_array(array, ARRLEN);
+    //generate_array(array, ARRLEN);
+    FILE *f = fopen("initial_array", "w");
     print_array(array, ARRLEN);
+    fprint_array(f, array, ARRLEN);
+
 
 //    return 0;
 
@@ -55,6 +60,8 @@ int main(){
 
     printf("Result: ");
     print_array(array, ARRLEN);
+    fprint_array(f, array, ARRLEN);
+    fclose(f);
 
     return 0;
 }
@@ -63,6 +70,7 @@ int main(){
 void quicksort_vectorized(int *A, int lo, int hi){
     if(lo<hi){
        int p = partition_vectorized(A, lo, hi);
+       printf("Pivot position returned: %d", p);
        quicksort_vectorized(A, lo, p-1);
        quicksort_vectorized(A, p+1, hi);
     }
@@ -74,11 +82,12 @@ int partition_vectorized(int *A, int lo, int hi){
     int j = hi-1;
     int i = 0;
     int k = 0;
+    int pivot_position = hi;
 
-    //while(j>lo){
+    printf("=======================================================================================\n");
     while(1){
 	printf("=============================================================\n");
-        printf("\n=== BEGIN \n==== j: %d |  lo: %d | hi: %d | pivot: %d ====\n", j, lo, hi, A[hi]);
+        printf("\n=== BEGIN \n==== lo: %d | pivot position: %d | pivot: %d ====\n", lo, pivot_position, A[pivot_position]);
       
         // define vector lengths
         int vector_length = VL;
@@ -86,63 +95,102 @@ int partition_vectorized(int *A, int lo, int hi){
         if(lo>=hi){
             break;
         }
+
         if(hi==lo+1){
             if(A[hi]<A[lo]){
-		//printf("::: we do the swap :::\n");
+		printf("::: we do the swap :::\n");
                 int tmp = A[hi];
                 A[hi] = A[lo];
                 A[lo] = tmp;
 				hi--;
+				pivot_position--;
             }
-			lo++;
+	    lo++;
+	    printf("Loop result: ");
+            print_array(A, ARRLEN);
             break;
         }
-        //else if(hi-lo<2*VL)
-        else if(hi-lo-1<VL)
-            vector_length = hi-lo-1;
 
-        //j -= vector_length;
+        if(pivot_position==lo+1){
+            if(A[pivot_position]<A[lo]){
+		printf("::: we do the swap with pivot :::\n");
+                int tmp = A[pivot_position];
+                A[pivot_position] = A[lo];
+                A[lo] = tmp;
+				pivot_position--;
+            }
+	    lo++;
+	    printf("Loop result: ");
+            print_array(A, ARRLEN);
+            break;
+        }
+	//else if(hi-lo<VL)
+	//   vector_length = hi-lo;
+
+        if(hi-lo<2*VL)
+	   vector_length = (hi-lo)/2;
+	printf("Vector length selected: %d\n", vector_length);
+        //else if(hi-lo-1<VL)
+        //   vector_length = hi-lo-1;
+
 	__epi_8xi32 pivot_vec = __builtin_epi_vbroadcast_8xi32(pivot, vector_length);
- 	
 	__epi_8xi32 vec1 = __builtin_epi_vload_strided_8xi32(A+hi-1, -sizeof(int32_t), vector_length);
-	//print_epi_8xi32(vec1, vector_length);
+	__epi_8xi1 mask1 = __builtin_epi_vmslt_8xi32(vec1, pivot_vec, vector_length);
 
-	__epi_8xi1 result1 = __builtin_epi_vmslt_8xi32(vec1, pivot_vec, vector_length);
+    __epi_8xi32 v1 = __builtin_epi_vcompress_8xi32(vec1, mask1, vector_length);
+    unsigned int pc1 = __builtin_epi_vmpopc_8xi1(mask1, vector_length); // number of lesser than values in the set
+    unsigned int pc_gt = vector_length-pc1;
 
-        // read vec2
-        //j -= vector_length;
+    printf("Elements : lt %d  |  gt %d\n", pc1, pc_gt);
 
-	__epi_8xi32 vec2 = __builtin_epi_vload_strided_8xi32(A+hi-vector_length-1, -sizeof(int32_t), vector_length);
+    // mask for greaters
+    __epi_8xi1 nmask1 = vnot(mask1,  vector_length);
+    // compressed greaters 
+    v1 = __builtin_epi_vcompress_8xi32(vec1, nmask1, vector_length);
 
-	__epi_8xi1 result2 = __builtin_epi_vmslt_8xi32(vec2, pivot_vec, vector_length);
-	//print_epi_8xi32(vec2, vector_length);
+    printf("compressed greater than : ");
+    print_epi_8xi32(v1, vector_length);
 
-        // now we store the data
-        //k = store_arrays(A, lo, hi, vec1, vec2, result1, result2, vector_length, vector_length, pivot);
-        k = store_arrays(A, lo, hi, vec1, vec2, result1, result2, vector_length, vector_length, pivot);
-        lo += k;
-        j += k;
-        hi = hi - vector_length + k;
+    // store greater for vec1
+    if(pc_gt>0){
+        __builtin_epi_vstore_strided_8xi32(A+hi, v1, -sizeof(int32_t), pc_gt);
+        pivot_position = hi-(pc_gt);
+        *(A+pivot_position) = pivot;
+    }
+
+    if(pc1>0 ){
+    // read vectors from beginning, they do not have to intersect
+    int num_to_load_from_start = pivot_position-lo-1>2*pc1 ? pc1 : pivot_position - lo - pc1;
+
+    //__epi_8xi32 start1 = __builtin_epi_vload_8xi32(address+lo, gvl1);
+    __epi_8xi32 start1 = __builtin_epi_vload_8xi32(A+lo, num_to_load_from_start);
+    printf("loaded from start %d : ", num_to_load_from_start );
+    print_epi_8xi32(start1, vector_length);
+
+    v1 = __builtin_epi_vcompress_8xi32(vec1, mask1, vector_length);
+    printf("compressed lesser than: ");
+    print_epi_8xi32(v1,vector_length);
+
+    // and here we store the data
+    vswap(A,
+		v1, start1,
+		lo, pivot_position-1, 
+		pc1,
+		vector_length);
+    }
+	
+        lo += pc1;
+        j += pc1;
+        hi = hi - vector_length + pc1;
 
 	printf("Loop result: ");
         print_array(A, ARRLEN);
 
-        //if(j==lo)
-        //    break;
-        //else
-        //j = hi-1-2*vector_length+k;
-        //printf("===  vector length: %d |  lo: %d |  pivot pos: %d\n", vector_length, lo, j);
-            //j--;
-
-        // for debugging
-        //break;
         i++;
-        if(i>10) break;
+        if(i>50) break;
     }
 
-	//printf("_______________ we return: %d _____________________", j);
-
-    return hi;
+    return pivot_position;
 }
 
 
@@ -153,6 +201,13 @@ void print_array(int32_t *A, int arrlen){
     printf("\n\n");
 }
 
+
+void fprint_array(FILE* f, int32_t *A, int arrlen){
+    for(int i=0; i<arrlen; i++){
+        fprintf(f, "%d ", A[i]);
+    }
+    fprintf(f, "\n\n");
+}
 
 void print_epi_8xi32(__epi_8xi32 epi, int gvl){
     int32_t *m = (int32_t*)malloc(8*sizeof(int32_t));
@@ -178,28 +233,6 @@ void print_mask(__epi_8xi1 mask, int gvl){
     free(m);
 }
 
-/*
-MERGE rd, a b, mask
-
-for element = 0 to VLMAX
-   if mask[element] then
-     result[element] = b[element]
-   else
-     result[element] = a[element]
-*/
-
-
-void vmerge(int *result, int *a, int* b, int *mask, int VLMAX){
-    for(int i=0; i<VLMAX; i++)
-       if(mask[i])
-         result[i] = b[i];
-       else
-         result[i] = a[i];
-}
-
-
-
-
 
 __epi_8xi1 vnot(__epi_8xi1 mask, unsigned int gvl){
     __epi_8xi8 xor_vector = __builtin_epi_vbroadcast_8xi8(1, gvl);
@@ -212,7 +245,6 @@ __epi_8xi1 vnot(__epi_8xi1 mask, unsigned int gvl){
 
 
 
-
 int store_arrays(int *address, 
                     unsigned int lo,
                     unsigned int hi,
@@ -220,36 +252,35 @@ int store_arrays(int *address,
                     __epi_8xi32 vec2, 
                     __epi_8xi1 mask1, 
                     __epi_8xi1 mask2, 
-                    int gvl1, 
+                    int gvl1,  // vector length used
                     int gvl2, 
                     int pivot){
 
     // store lessers
     //vec1:
-    __epi_8xi32 v1 = __builtin_epi_vcompress_8xi32__(vec1, mask1, gvl1);
+    __epi_8xi32 v1 = __builtin_epi_vcompress_8xi32(vec1, mask1, gvl1);
+    unsigned int pc1 = __builtin_epi_vmpopc_8xi1(mask1, gvl1); // number of lesser than values in the set
+    unsigned int pc_gt = gvl1-pc1;
 
-    //vcompress(v1, vec1, mask1, gvl1);
-   // int pc1 = vpopc(mask1, gvl1);
-    unsigned int pc1 = __builtin_epi_vmpopc_8xi1(mask1, gvl1);
-    // store greaters
-    //vstore_strided(address, v1, 1, pc1);
-
+    
     //vec2:
-    __epi_8xi32 v2 = __builtin_epi_vcompress_8xi32__(vec2, mask2, gvl2);
-
+    __epi_8xi32 v2 = __builtin_epi_vcompress_8xi32(vec2, mask2, gvl2);
     unsigned int pc2 = __builtin_epi_vmpopc_8xi1(mask2, gvl2);
+
+    printf("Elements : lt %d  |  gt %d\n", pc1, pc_gt);
 
     // mask for greaters
     __epi_8xi1 nmask1 = vnot(mask1,  gvl1);
-     
-    v1 = __builtin_epi_vcompress_8xi32__(vec1, nmask1, gvl1);
-    printf("compressed3: ");
+    // compressed greaters 
+    v1 = __builtin_epi_vcompress_8xi32(vec1, nmask1, gvl1);
+
+    printf("compressed greater than : ");
     print_epi_8xi32(v1, gvl1);
-    printf("To store: %d\n", gvl1-pc1);
-    printf("We store at index: %d\n", hi);
+    //printf("To store: %d\n", gvl1-pc1);
+    //printf("We store at index: %d\n", hi);
 
     // store greater for vec1
-    __builtin_epi_vstore_strided_8xi32(address+hi, v1, -sizeof(int32_t), gvl1-pc1);
+    __builtin_epi_vstore_strided_8xi32(address+hi, v1, -sizeof(int32_t), pc_gt);
 
     //vec2:
     /* __epi_8xi1 nmask2 = vnot(mask2, gvl2);
@@ -263,7 +294,8 @@ int store_arrays(int *address,
     */
 
     // we store pivot
-    int32_t pivot_position = hi-(gvl1-pc1);
+    //int32_t pivot_position = hi-(gvl1-pc1);
+    int32_t pivot_position = hi-(pc_gt);
     *(address+pivot_position) = pivot;
 
 
@@ -273,36 +305,45 @@ int store_arrays(int *address,
 
    
    // if short vector do not load anything 
-   if(hi==lo+gvl1){
-    	v1 = __builtin_epi_vcompress_8xi32__(vec1, mask1, gvl1);
-    	__builtin_epi_vstore_8xi32(lo, v1, pc1);
+   /*if(hi==lo){
+	printf("One element left\n");
+	int x;
+	scanf("%d", x);
+    	v1 = __builtin_epi_vcompress_8xi32(vec1, mask1, gvl1);
+    	__builtin_epi_vstore_8xi32(address+lo, v1, pc1);
 
 	return pc1;
   	 
-   }
+   }*/
     
-    // read vectors from beginning
-    __epi_8xi32 start1 = __builtin_epi_vload_8xi32(address+lo, gvl1);
-    printf("loaded from start 1: ");
-    print_epi_8xi32(start1, gvl1);
-    __epi_8xi32 start2 = __builtin_epi_vload_8xi32(address+lo+gvl1, gvl2);
-    printf("loaded from start 2: ");
-    print_epi_8xi32(start2, gvl2);
+    if(pc1>0){
+    // read vectors from beginning, they do not have to intersect
+    int num_to_load_from_start = pivot_position-lo-1>2*pc1 ? pc1 : pivot_position - lo - pc1 -1;
 
-    v1 = __builtin_epi_vcompress_8xi32__(vec1, mask1, gvl1);
-    printf("compressed1: ");
+    //__epi_8xi32 start1 = __builtin_epi_vload_8xi32(address+lo, gvl1);
+    __epi_8xi32 start1 = __builtin_epi_vload_8xi32(address+lo, num_to_load_from_start);
+    printf("loaded from start %d : ", num_to_load_from_start );
+    print_epi_8xi32(start1, gvl1);
+
+    __epi_8xi32 start2 = __builtin_epi_vload_8xi32(address+lo+gvl1, gvl2);
+    //printf("loaded from start 2: ");
+    //print_epi_8xi32(start2, gvl2);
+
+
+    v1 = __builtin_epi_vcompress_8xi32(vec1, mask1, gvl1);
+    printf("compressed lesser than: ");
     print_epi_8xi32(v1, gvl1);
-    v2 = __builtin_epi_vcompress_8xi32__(vec2, mask2, gvl2);
-    printf("compressed2: ");
-    print_epi_8xi32(v2, gvl2);
+    v2 = __builtin_epi_vcompress_8xi32(vec2, mask2, gvl2);
+    //printf("compressed2: ");
+    //print_epi_8xi32(v2, gvl2);
 
     // and here we store the data
     vswap(address,
 		v1, start1,
-	       	v2,  start2,
 		lo, pivot_position-1, 
-		pc1, pc2,
+		pc1,
 		gvl1);
+    }
 
     return pc1;
 }
@@ -311,10 +352,8 @@ int store_arrays(int *address,
 
 void vswap(int32_t *address,
 		__epi_8xi32 a1, __epi_8xi32 start1,
-	       	__epi_8xi32 b1,  __epi_8xi32 start2,
 		unsigned int lo, unsigned int hi, 
 		unsigned  int num_to_swap1,
-		unsigned  int num_to_swap2,
 		unsigned int vector_length) {
     
     //printf("We need to swap at: %d %d\n", lo, hi);
@@ -334,22 +373,19 @@ void vswap(int32_t *address,
 
     //printf("We finished the first swap\n");
 
-    if(num_to_swap2>0){
+    /*if(num_to_swap2>0){
 	    //__epi_8xi32 a = __builtin_epi_vload_8xi32(a1 + vector_length,  to_swap);
 	    //__epi_8xi32 a0 = __builtin_epi_vload_8xi32(a2 + vector_length, to_swap);
 
-	    /*a2  = __builtin_epi_vxor_8xi32(a2, b2, num_to_swap2);
-	    b2 = __builtin_epi_vxor_8xi32(b2, a2,  num_to_swap2);
-	    a2  = __builtin_epi_vxor_8xi32(a2, b2, num_to_swap2);*/
 
 	__builtin_epi_vstore_8xi32(address+lo+num_to_swap1, b1, num_to_swap2);
 	__builtin_epi_vstore_strided_8xi32(address+hi-num_to_swap1, start2, -sizeof(int32_t), num_to_swap2);
 
-    }
+    } */
 }
 
 
-
+/*
 __epi_8xi32 __builtin_epi_vcompress_8xi32__(__epi_8xi32 a, __epi_8xi1 mask, unsigned long int gvl){
 	__epi_8xi8 mask_array = __builtin_epi_cast_8xi8_8xi1(mask);	
 	char *m = (char*)malloc(8*sizeof(char));
@@ -375,7 +411,7 @@ __epi_8xi32 __builtin_epi_vcompress_8xi32__(__epi_8xi32 a, __epi_8xi1 mask, unsi
 	free(result);
 	return a;
 }
-
+*/
 
 
 /*
