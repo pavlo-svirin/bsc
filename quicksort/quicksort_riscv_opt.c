@@ -124,7 +124,7 @@ int partition_vectorized_opt(int *A, int lo, int hi){
 		// no need to perform swaps, just save them and go to the next iteration
 		if(vec_end_min>pivot){
 			// save it to hi, stride -1
-        	__builtin_epi_vstore_strided_8xi32(A+hi, vec_end, -sizeof(int32_t), vector_length);
+        	__builtin_epi_vstore_strided_8xi32(A+j, vec_end, -sizeof(int32_t), vector_length);
 			// put pivot
 			j -= vector_length;
 			A[j+1] = pivot;
@@ -144,16 +144,51 @@ int partition_vectorized_opt(int *A, int lo, int hi){
 		// load pivot against pivot
 		
 		// compare and handle results
-		__epi_8xi1 mask_lt = __builtin_epi_vmslt_8xi32(vec_end, vec_pivot, vector_length);
-    	__epi_8xi32 put_to_beg = __builtin_epi_vcompress_8xi32(vec_end, mask_lt, vector_length);
-		// number of lesser than values in the set
-    	unsigned int lt_count = __builtin_epi_vmpopc_8xi1(mask_lt, vector_length); 
-    	unsigned int gt_count = vector_length - lt_count;
-    	__epi_8xi1 mask_gt = vnot(mask_lt,  vector_length);
-    	// compressed greaters 
-    	__epi_8xi32 put_to_end = __builtin_epi_vcompress_8xi32(vec_end, mask_gt, vector_length);
+		__epi_8xi1 mask_lt_end = __builtin_epi_vmslt_8xi32(vec_end, vec_pivot, vector_length);
+		__epi_8xi1 mask_lt_beg = __builtin_epi_vmslt_8xi32(vec_beg, vec_pivot, vector_length);
 
-		__epi_8xi32 indexes = __builtin_epi_vid_8xi32(vector_length);
+		// number of lesser than values in the set
+    	unsigned int lt_count_end = __builtin_epi_vmpopc_8xi1(mask_lt_end, vector_length); 
+    	unsigned int gt_count_end = vector_length - lt_count_end;
+    	unsigned int lt_count_beg = __builtin_epi_vmpopc_8xi1(mask_lt_beg, vector_length); 
+    	unsigned int gt_count_beg = vector_length - lt_count_beg;
+
+    	// compressed greaters 
+    	__epi_8xi1 mask_gt = vnot(mask_lt_end,  vector_length);
+    	__epi_8xi32 put_to_end = __builtin_epi_vcompress_8xi32(vec_end, mask_gt, vector_length);
+        
+		// store greaters at top
+		__builtin_epi_vstore_strided_8xi32(A+j, put_to_end, -sizeof(int32_t), gt_count_end);
+
+		// store pivot before greaters
+		new_pivot_position = j-gt_count_end;
+		A[new_pivot_position] = pivot;
+		
+		// store lessers
+		// compress lessers from beginning
+    	__epi_8xi32 put_to_beg = __builtin_epi_vcompress_8xi32(vec_beg, mask_lt_beg, vector_length);
+		__builtin_epi_vstore_strided_8xi32(A+i, put_to_beg, sizeof(int32_t), lt_count_beg);
+		
+		// now we are doing the swap
+		// create the shortest mask filled with ones
+		__epi_8xi1 swap_mask;
+		swap_mask = vnot(swap_mask, 
+							lt_count_end>gt_count_beg ? gt_count_beg : lt_count_end);
+		// prepare swap vectors
+    	__epi_8xi32 swap_vec_end = __builtin_epi_vcompress_8xi32(vec_end, 
+													mask_lt_end, 
+													vector_length);
+    	__epi_8xi32 swap_vec_beg = __builtin_epi_vcompress_8xi32(vec_beg, 
+													vnot(mask_lt_beg, vector_length), 
+													vector_length);
+		put_to_end = __builtin_epi_vmerge_8xi32(swap_vec_end, swap_vec_beg, swap_mask, gt_count_end);
+		put_to_beg = __builtin_epi_vmerge_8xi32(swap_vec_beg, swap_vec_beg, swap_mask, gt_count_beg);
+		__builtin_epi_vstore_strided_8xi32(A+i+lt_count_beg, 
+											put_to_beg, sizeof(int32_t), gt_count_beg);
+		__builtin_epi_vstore_strided_8xi32(A+new_pivot_position-1, 
+											put_to_end, -sizeof(int32_t), gt_count_end);
+
+		//__epi_8xi32 indexes = __builtin_epi_vid_8xi32(vector_length);
 
 		i += vector_length;
 		j -= vector_length;
