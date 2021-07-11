@@ -9,6 +9,9 @@
 #define ARRLEN 20
 #define VL 8
 
+#define min(X, Y)  ((X) < (Y) ? (X) : (Y))
+#define max(X, Y)  ((X) > (Y) ? (X) : (Y))
+
 int32_t array[] = {5,13,55,35,84,58,42,76,78,2,86,3,33,64,63,76,61,93,64,21};
 //int32_t array[ARRLEN]; 
 
@@ -81,20 +84,25 @@ int partition_vectorized_opt(int *A, int lo, int hi){
 	int i = lo;
 	int j = hi-1;
 	int32_t pivot = A[hi];
-	int new_pivot_position = j;
+	int new_pivot_position = hi;
 
 	while(i<=j){
 		int vector_length = VL;
 		if(i==j){
 			break;
 		}
+		else if(j-i==1){
+			//print_array(A+i, 2);
+			//A[i] = min(A[i], A[j]);
+			//A[j] = max(A[i], A[j]);
+			i++;
+			break;
+		}
 		else if(j-i<2*VL){
 			vector_length = (j-i)/2;
 		}
-		else if(j-i==1){
-			print_array(A+i, 2);
-			break;
-		}
+
+		printf("i: %d  | j: %d |  vector_length: %d | pivot: %d ========\n", i, j, vector_length, pivot);
 
 		// set pivot vector
 		__epi_8xi32 vec_pivot = __builtin_epi_vbroadcast_8xi32(pivot, vector_length);
@@ -158,16 +166,18 @@ int partition_vectorized_opt(int *A, int lo, int hi){
     	__epi_8xi32 put_to_end = __builtin_epi_vcompress_8xi32(vec_end, mask_gt, vector_length);
         
 		// store greaters at top
-		__builtin_epi_vstore_strided_8xi32(A+j, put_to_end, -sizeof(int32_t), gt_count_end);
+		__builtin_epi_vstore_strided_8xi32(A+new_pivot_position, put_to_end, -sizeof(int32_t), gt_count_end);
 
 		// store pivot before greaters
-		new_pivot_position = j-gt_count_end;
+		new_pivot_position = j-gt_count_end+1;
 		A[new_pivot_position] = pivot;
 		
 		// store lessers
 		// compress lessers from beginning
     	__epi_8xi32 put_to_beg = __builtin_epi_vcompress_8xi32(vec_beg, mask_lt_beg, vector_length);
 		__builtin_epi_vstore_strided_8xi32(A+i, put_to_beg, sizeof(int32_t), lt_count_beg);
+		
+		
 		
 		// now we are doing the swap
 		// create the shortest mask filled with ones
@@ -181,17 +191,32 @@ int partition_vectorized_opt(int *A, int lo, int hi){
     	__epi_8xi32 swap_vec_beg = __builtin_epi_vcompress_8xi32(vec_beg, 
 													vnot(mask_lt_beg, vector_length), 
 													vector_length);
-		put_to_end = __builtin_epi_vmerge_8xi32(swap_vec_end, swap_vec_beg, swap_mask, gt_count_end);
-		put_to_beg = __builtin_epi_vmerge_8xi32(swap_vec_beg, swap_vec_beg, swap_mask, gt_count_beg);
+		put_to_end = __builtin_epi_vmerge_8xi32(swap_vec_end, swap_vec_beg, swap_mask, lt_count_end);
+		put_to_beg = __builtin_epi_vmerge_8xi32(swap_vec_beg, swap_vec_end, swap_mask, gt_count_beg);
+		
+		printf("Compressed array end: ");
+		print_epi_8xi32(swap_vec_end, lt_count_end);
+		printf("Compressed array beg: ");
+		print_epi_8xi32(swap_vec_beg, gt_count_beg);
+		printf("Swap array end: ");
+		print_epi_8xi32(put_to_end, lt_count_end);
+		printf("Swap array beg: ");
+		print_epi_8xi32(put_to_beg, gt_count_beg);
+
 		__builtin_epi_vstore_strided_8xi32(A+i+lt_count_beg, 
 											put_to_beg, sizeof(int32_t), gt_count_beg);
 		__builtin_epi_vstore_strided_8xi32(A+new_pivot_position-1, 
-											put_to_end, -sizeof(int32_t), gt_count_end);
+											put_to_end, -sizeof(int32_t), lt_count_end);
 
-		//__epi_8xi32 indexes = __builtin_epi_vid_8xi32(vector_length);
 
-		i += vector_length;
-		j -= vector_length;
+		printf("Intermediate result: ");
+		print_array(A, ARRLEN);
+		
+		//i += vector_length;
+		i += lt_count_beg + min(gt_count_beg, lt_count_end);
+		//j -= vector_length;
+		j -= gt_count_end;
+
 	}
 
 	return new_pivot_position;
