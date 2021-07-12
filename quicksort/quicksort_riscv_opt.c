@@ -13,9 +13,11 @@
 #define max(X, Y)  ((X) > (Y) ? (X) : (Y))
 
 int32_t array[] = {5,13,55,35,84,58,42,76,78,2,86,3,33,64,63,76,61,93,64,21};
+//int32_t array[] = {5,13,55,35,84,58,42,76,78,2,86,3,33,64,63}; //,76,61,93,64,21};
 //int32_t array[ARRLEN]; 
 
 void quicksort_vectorized(int*, int, int);
+void quicksort_vectorized_opt(int*, int, int);
 int partition_vectorized_opt(int*, int, int);
 void print_array(int32_t*, int);
 void fprint_array(FILE*, int32_t*, int);
@@ -57,9 +59,9 @@ int main(){
 
 //    return 0;
 
-    //quicksort_vectorized(array, 0, ARRLEN-1);
+    quicksort_vectorized_opt(array, 0, ARRLEN-1);
 
-    partition_vectorized_opt(array, 0, ARRLEN-1);
+    //partition_vectorized_opt(array, 0, ARRLEN-1);
 
     printf("Result: ");
     print_array(array, ARRLEN);
@@ -73,7 +75,6 @@ int main(){
 void quicksort_vectorized_opt(int *A, int lo, int hi){
     if(lo<hi){
        int p = partition_vectorized_opt(A, lo, hi);
-       printf("Pivot position returned: %d", p);
        quicksort_vectorized_opt(A, lo, p-1);
        quicksort_vectorized_opt(A, p+1, hi);
     }
@@ -86,19 +87,25 @@ int partition_vectorized_opt(int *A, int lo, int hi){
 	int32_t pivot = A[hi];
 	int new_pivot_position = hi;
 
+	int iter = 0;
+
 	while(i<=j){
 		int vector_length = VL;
-		if(i==j){
-			break;
-		}
-		else if(j-i==1){
+		if(j-i==1){
 			//print_array(A+i, 2);
 			//A[i] = min(A[i], A[j]);
 			//A[j] = max(A[i], A[j]);
-			i++;
+			vector_length = 1;
+		}
+		else if(j==i){
+			if(A[j]>pivot){
+				A[new_pivot_position] = A[j];
+				A[j] = pivot;	
+				new_pivot_position--;
+			}
 			break;
 		}
-		else if(j-i<2*VL){
+		else if(j-i+1<2*VL){
 			vector_length = (j-i)/2;
 		}
 
@@ -146,7 +153,9 @@ int partition_vectorized_opt(int *A, int lo, int hi){
 
 		// </TO_BE_OPTIMIZED>
 
+		printf("Beg: ");
 		print_epi_8xi32(vec_beg, vector_length);
+		printf("End: ");
 		print_epi_8xi32(vec_end, vector_length);
 
 		// load pivot against pivot
@@ -182,8 +191,11 @@ int partition_vectorized_opt(int *A, int lo, int hi){
 		// now we are doing the swap
 		// create the shortest mask filled with ones
 		__epi_8xi1 swap_mask;
-		swap_mask = vnot(swap_mask, 
-							lt_count_end>gt_count_beg ? gt_count_beg : lt_count_end);
+		int swap_mask_len = lt_count_end>gt_count_beg ? gt_count_beg : lt_count_end;
+		swap_mask = vnot(swap_mask, swap_mask_len);
+		printf("Swap mask (len %d): ", swap_mask_len);
+		print_mask(swap_mask, vector_length);
+
 		// prepare swap vectors
     	__epi_8xi32 swap_vec_end = __builtin_epi_vcompress_8xi32(vec_end, 
 													mask_lt_end, 
@@ -198,9 +210,9 @@ int partition_vectorized_opt(int *A, int lo, int hi){
 		print_epi_8xi32(swap_vec_end, lt_count_end);
 		printf("Compressed array beg: ");
 		print_epi_8xi32(swap_vec_beg, gt_count_beg);
-		printf("Swap array end: ");
+		printf("This goes to end: ");
 		print_epi_8xi32(put_to_end, lt_count_end);
-		printf("Swap array beg: ");
+		printf("This goes to beginning: ");
 		print_epi_8xi32(put_to_beg, gt_count_beg);
 
 		__builtin_epi_vstore_strided_8xi32(A+i+lt_count_beg, 
@@ -216,8 +228,10 @@ int partition_vectorized_opt(int *A, int lo, int hi){
 		i += lt_count_beg + min(gt_count_beg, lt_count_end);
 		//j -= vector_length;
 		j -= gt_count_end;
-
+		iter++;
 	}
+
+	printf("We are returning from partiution: %d\n", new_pivot_position);
 
 	return new_pivot_position;
 }
