@@ -6,15 +6,15 @@
 #include <stdint.h>
 #include <math.h>
 
-#define ARRLEN 20
+#define ARRLEN 10000
 #define VL 8
 
 #define min(X, Y)  ((X) < (Y) ? (X) : (Y))
 #define max(X, Y)  ((X) > (Y) ? (X) : (Y))
 
-int32_t array[] = {5,13,55,35,84,58,42,76,78,2,86,3,33,64,63,76,61,93,64,21};
+//int32_t array[] = {5,13,55,35,84,58,42,76,78,2,86,3,33,64,63,76,61,93,64,21};
 //int32_t array[] = {5,13,55,35,84,58,42,76,78,2,86,3,33,64,63}; //,76,61,93,64,21};
-//int32_t array[ARRLEN]; 
+int32_t array[ARRLEN]; 
 
 void quicksort_vectorized_opt(int*, int, int);
 int partition_vectorized_opt(int*, int, int);
@@ -39,10 +39,20 @@ void generate_array(int32_t *addr, unsigned int arrlen){
 }
 
 
+void read_array(char *filename, unsigned int num, int32_t *dst){
+	FILE *f = fopen(filename, "r");
+	for(int i=0; i<num; i++){
+		fscanf(f, "%d\n", &dst[i]);
+	}
+	fclose(f);
+}
+
 
 int main(){
     //quicksort(array, 0, ARRLEN-1);
     //generate_array(array, ARRLEN);
+	
+    read_array("/home/psvirin/dev/test/a", ARRLEN, array);
     FILE *f = fopen("initial_array", "w");
     print_array(array, ARRLEN);
     fprint_array(f, array, ARRLEN);
@@ -84,6 +94,7 @@ int partition_vectorized_opt(int *A, int lo, int hi){
 			//A[i] = min(A[i], A[j]);
 			//A[j] = max(A[i], A[j]);
 			vector_length = 1;
+			//break;
 		}
 		else if(j==i){
 			if(A[j]>pivot){
@@ -97,8 +108,11 @@ int partition_vectorized_opt(int *A, int lo, int hi){
 			vector_length = (j-i)/2;
 		}
 
-		printf("i: %d  | j: %d |  vector_length: %d | pivot: %d ========\n", i, j, vector_length, pivot);
+		long gvl = __builtin_epi_vsetvl((j-i)/2, __epi_e32, __epi_m1);
 
+		vector_length = (gvl==0 || gvl==1) ? 1 : gvl;
+
+		printf("i: %d  | j: %d |  vector_length: %d | pivot: %d | gvl %d ========\n", i, j, vector_length, pivot, gvl);
 		// set pivot vector
 		__epi_8xi32 vec_pivot = __builtin_epi_vbroadcast_8xi32(pivot, vector_length);
 
@@ -123,9 +137,11 @@ int partition_vectorized_opt(int *A, int lo, int hi){
 		int32_t vec_beg_min = __builtin_epi_vextract_8xi32(vec_beg_min_epi, 0);
 		int32_t vec_end_min = __builtin_epi_vextract_8xi32(vec_end_min_epi, 0);
 
+
+		
 		// all of the ending vector values are greater or equal than pivot
 		// no need to perform swaps, just save them and go to the next iteration
-		if(vec_end_min>pivot){
+/*		if(vec_end_min>pivot){
 			// save it to hi, stride -1
         	__builtin_epi_vstore_strided_8xi32(A+j, vec_end, -sizeof(int32_t), vector_length);
 			// put pivot
@@ -136,15 +152,17 @@ int partition_vectorized_opt(int *A, int lo, int hi){
 			}
 			continue;
 		}
+*/
+
 
 		// we also can keep read vectors for future iterations, can be considered later
 
 		// </TO_BE_OPTIMIZED>
 
-		printf("Beg: ");
-		print_epi_8xi32(vec_beg, vector_length);
-		printf("End: ");
-		print_epi_8xi32(vec_end, vector_length);
+//		printf("Beg: ");
+//		print_epi_8xi32(vec_beg, vector_length);
+//		printf("End: ");
+//		print_epi_8xi32(vec_end, vector_length);
 
 		// load pivot against pivot
 		
@@ -174,15 +192,13 @@ int partition_vectorized_opt(int *A, int lo, int hi){
     	__epi_8xi32 put_to_beg = __builtin_epi_vcompress_8xi32(vec_beg, mask_lt_beg, vector_length);
 		__builtin_epi_vstore_strided_8xi32(A+i, put_to_beg, sizeof(int32_t), lt_count_beg);
 		
-		
-		
 		// now we are doing the swap
 		// create the shortest mask filled with ones
 		__epi_8xi1 swap_mask;
 		int swap_mask_len = lt_count_end>gt_count_beg ? gt_count_beg : lt_count_end;
 		swap_mask = vnot(swap_mask, swap_mask_len);
-		printf("Swap mask (len %d): ", swap_mask_len);
-		print_mask(swap_mask, vector_length);
+//		printf("Swap mask (len %d): ", swap_mask_len);
+//		print_mask(swap_mask, vector_length);
 
 		// prepare swap vectors
     	__epi_8xi32 swap_vec_end = __builtin_epi_vcompress_8xi32(vec_end, 
@@ -194,14 +210,14 @@ int partition_vectorized_opt(int *A, int lo, int hi){
 		put_to_end = __builtin_epi_vmerge_8xi32(swap_vec_end, swap_vec_beg, swap_mask, lt_count_end);
 		put_to_beg = __builtin_epi_vmerge_8xi32(swap_vec_beg, swap_vec_end, swap_mask, gt_count_beg);
 		
-		printf("Compressed array end: ");
-		print_epi_8xi32(swap_vec_end, lt_count_end);
-		printf("Compressed array beg: ");
-		print_epi_8xi32(swap_vec_beg, gt_count_beg);
-		printf("This goes to end: ");
-		print_epi_8xi32(put_to_end, lt_count_end);
-		printf("This goes to beginning: ");
-		print_epi_8xi32(put_to_beg, gt_count_beg);
+//		printf("Compressed array end: ");
+//		print_epi_8xi32(swap_vec_end, lt_count_end);
+//		printf("Compressed array beg: ");
+//		print_epi_8xi32(swap_vec_beg, gt_count_beg);
+//		printf("This goes to end: ");
+//		print_epi_8xi32(put_to_end, lt_count_end);
+//		printf("This goes to beginning: ");
+//		print_epi_8xi32(put_to_beg, gt_count_beg);
 
 		__builtin_epi_vstore_strided_8xi32(A+i+lt_count_beg, 
 											put_to_beg, sizeof(int32_t), gt_count_beg);
@@ -209,8 +225,9 @@ int partition_vectorized_opt(int *A, int lo, int hi){
 											put_to_end, -sizeof(int32_t), lt_count_end);
 
 
-		printf("Intermediate result: ");
-		print_array(A, ARRLEN);
+		//printf("\nIntermediate result: ");
+		//print_array(A, ARRLEN);
+		//exit(0);
 		
 		//i += vector_length;
 		i += lt_count_beg + min(gt_count_beg, lt_count_end);
@@ -219,7 +236,7 @@ int partition_vectorized_opt(int *A, int lo, int hi){
 		iter++;
 	}
 
-	printf("We are returning from partiution: %d\n", new_pivot_position);
+	printf("We are returning from partition: %d\n", new_pivot_position);
 
 	return new_pivot_position;
 }
@@ -243,7 +260,7 @@ void fprint_array(FILE* f, int32_t *A, int arrlen){
 }
 
 void print_epi_8xi32(__epi_8xi32 epi, int gvl){
-    int32_t *m = (int32_t*)malloc(8*sizeof(int32_t));
+    int32_t *m = (int32_t*)malloc(gvl*sizeof(int32_t));
     __builtin_epi_vstore_8xi32(m, epi, gvl);
     
     for(int i=0; i<gvl; i++){
@@ -256,7 +273,7 @@ void print_epi_8xi32(__epi_8xi32 epi, int gvl){
 
 void print_mask(__epi_8xi1 mask, int gvl){
     __epi_8xi8 mask_array = __builtin_epi_cast_8xi8_8xi1(mask);	
-    signed char *m = (signed char*)malloc(8*sizeof(char));
+    signed char *m = (signed char*)malloc(gvl*sizeof(char));
     __builtin_epi_vstore_8xi8(m, mask_array, gvl);
     
     for(int i=0; i<gvl; i++){
