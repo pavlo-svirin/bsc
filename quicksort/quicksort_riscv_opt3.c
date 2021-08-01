@@ -12,6 +12,11 @@
 #define min(X, Y)  ((X) < (Y) ? (X) : (Y))
 #define max(X, Y)  ((X) > (Y) ? (X) : (Y))
 
+struct {
+    unsigned int gt;
+    unsigned int lt;
+} qs_part3_struct;
+
 //int32_t array[] = {5,13,55,35,84,58,42,76,78,2,86,3,33,64,63,76,61,93,64,21};
 //int32_t array[] = {5,13,55,35,84,58,42,76,78,2,86,3,33,64,63}; //,76,61,93,64,21};
 int32_t array[] = {590, 597, 306, 778, 87, 938, 287, 928, 325, 594}; 
@@ -26,29 +31,6 @@ void print_epi_8xi32(__epi_8xi32 epi, int gvl);
 
 
 __epi_8xi1 vnot(__epi_8xi1 mask, unsigned int gvl);
-
-int store_arrays(int *address, unsigned int lo, unsigned int hi, __epi_8xi32 vec1, __epi_8xi32 vec2, 
-                       __epi_8xi1 mask1, __epi_8xi1 mask2, 
-                       int gvl1, int gvl2, int pivot);
-
-
-
-void generate_array(int32_t *addr, unsigned int arrlen){
-    srand(time(NULL));
-    for(int i=0; i<arrlen; i++)
-        *(addr+i) = (double)rand()/(double)RAND_MAX*100+1;
-}
-
-
-void read_array(char *filename, unsigned int num, int32_t *dst){
-	FILE *f = fopen(filename, "r");
-	for(int i=0; i<num; i++){
-		fscanf(f, "%d\n", &dst[i]);
-		if(dst[i]==0)
-        		dst[i] = (double)rand()/(double)RAND_MAX*100000+1;
-	}
-	fclose(f);
-}
 
 
 int main(){
@@ -74,18 +56,13 @@ int main(){
 
 
 void quicksort_vectorized_opt3(int *A, int lo, int hi){
-    
-    //__epi_8xi32 __builtin_epi_vid_8xi32_mask(__epi_8xi32 merge, __epi_8xi1 mask,
-	//		                                         unsigned long int gvl);
-
-    //return;
-
     if(lo<hi){
-       int p = partition_vectorized_opt(A, lo, hi);
-       quicksort_vectorized_opt3(A, lo, p-1);
-       quicksort_vectorized_opt3(A, p+1, hi);
+       qs_part3_struct part_info  = partition_vectorized_opt(A, lo, hi);
+       quicksort_vectorized_opt3(A, lo, part_info.lt-1);
+       quicksort_vectorized_opt3(A, part_info.gt+1, hi);
     }
 }
+
 
 
 int partition_vectorized_opt3(int *A, int lo, int hi){
@@ -96,16 +73,82 @@ int partition_vectorized_opt3(int *A, int lo, int hi){
     unsigned long int maxvlen = __builtin_epi_vsetvlmax(__epi_e32, __epi_m1);
     __epi_8xi32 vec_pivot = __builtin_epi_vbroadcast_8xi32(pivot, maxvlen);
 
+    /*
+   
+     while i <= gt:      # Starting from the first element.
+         if A[i] < pivot:
+             A[lt], A[i] = A[i], A[lt]
+             lt += 1
+             i += 1
+         elif A[i] > pivot:
+             A[i], A[gt] = A[gt], A[i]
+             gt -= 1
+         else:
+             i += 1
+
+     return lt, gt
+     */
+    
+    
     while(i<=gt){
         long gvl = __builtin_epi_vsetvl((gt-i)/2, __epi_e32, __epi_m1);
-	// read "vector_length" from the end
-	__epi_8xi32 vec_end = __builtin_epi_vload_strided_8xi32(A+j, -sizeof(int32_t), gvl);
-	// read "vector_length" from beginning
-	__epi_8xi32 vec_beg = __builtin_epi_vload_strided_8xi32(A+i, sizeof(int32_t), gvl);
-
-
+                
+        // read "vector_length" from beginning
+        __epi_8xi32 vec_beg = __builtin_epi_vload_strided_8xi32(A+i, sizeof(int32_t), gvl);
+            
+        __epi_8xi1 mask_lt_beg = __builtin_epi_vmslt_8xi32(vec_beg, vec_pivot, gvl);
+        unsigned int lt_count_beg = __builtin_epi_vmpopc_8xi1(mask_lt_beg, gvl);
+        __epi_8xi32 put_to_beg_lt = __builtin_epi_vcompress_8xi32(vec_beg, mask_lt_beg, gvl);
+        
+        __epi_8xi1 mask_eq_beg = __builtin_epi_vmseq_8xi32(vec_beg, vec_pivot, gvl);
+        unsigned int eq_count_beg = __builtin_epi_vmpopc_8xi1(mask_eq_beg, gvl);
+        // vcompress
+        __epi_8xi32 put_to_beg_eq = __builtin_epi_vcompress_8xi32(vec_beg, mask_eq_beg, gvl);
+        // vslideup
+        put_to_beg_eq = __builtin_epi_vslideup_8xi32(put_to_beg_eq, lt_count_beg, gvl);
+        // vmerge
+        __epi_8xi1 beg_merge_mask = __builtin_epi_vbroadcast_8xi8(1, lt_count_beg);
+        put_to_beg = __builtin_epi_vmerge_8xi32(put_to_beg_eq,
+                                                put_to_beg_lt,
+                                                beg_merge_mask,
+                                                lt_count_beg+eq_count_beg);
+        
+        // read "vector_length" from the end
+        __epi_8xi32 vec_end = __builtin_epi_vload_strided_8xi32(A+gt,
+                                                                -sizeof(int32_t),
+                                                                gvl-lt_count_beg-eq_count_beg);
+        vec_end = __builtin_epi_vslideup_8xi32(vec_end,
+                                               lt_count_beg+eq_count_beg,
+                                               gvl);
+        beg_merge_mask = __builtin_epi_vbroadcast_8xi8(1, lt_count_beg+eq_count_beg);
+        put_to_beg = __builtin_epi_vmerge_8xi32(vec_end,
+                                                put_to_beg,
+                                                beg_merge_mask,
+                                                lt_count_beg+eq_count_beg);
+        // vstore to beginning
+        __builtin_epi_vstore_8xi32(A+lt, put_to_beg, gvl);
+        lt += lt_count_beg;
+        i += lt_count_beg;
+        
+        // vstore to end
+        __epi_8xi1 mask_gt_beg = __builtin_epi_vmnor_8xi1(lt_count_beg,
+                                                eq_count_beg,
+                                                gvl);
+        vec_end = __builtin_epi_vcompress_8xi32(vec_beg, mask_gt_beg, gvl);
+        __builtin_epi_vstore_strided_8xi32(A+gt,
+                                           vec_end,
+                                           -sizeof(int32_t),
+                                           gvl-lt_count_beg-eq_count_beg);
+        gt -= gvl-lt_count_beg-eq_count_beg;
     }
+    
+    qs_part3_struct part3_data;
+    part3_data.gt = gt;
+    part3_data.lt = lt;
+    
+    return part3_data;
 }
+
 
 
 int partition_vectorized_opt(int *A, int lo, int hi){
@@ -273,52 +316,8 @@ int partition_vectorized_opt(int *A, int lo, int hi){
 
 
 
-void print_array(int32_t *A, int arrlen){
-    for(int i=0; i<arrlen; i++){
-        printf("%d ", A[i]);
-    }
-    printf("\n\n");
-}
 
 
-void fprint_array(FILE* f, int32_t *A, int arrlen){
-    for(int i=0; i<arrlen; i++){
-        fprintf(f, "%d ", A[i]);
-    }
-    fprintf(f, "\n\n");
-}
-
-void print_epi_8xi32(__epi_8xi32 epi, int gvl){
-    int32_t *m = (int32_t*)malloc(gvl*sizeof(int32_t));
-    __builtin_epi_vstore_8xi32(m, epi, gvl);
-    
-    for(int i=0; i<gvl; i++){
-        printf("%d ", m[i]);
-    }
-    printf("\n\n");
-    free(m);
-}
-
-
-void print_mask(__epi_8xi1 mask, int gvl){
-    __epi_8xi8 mask_array = __builtin_epi_cast_8xi8_8xi1(mask);	
-    signed char *m = (signed char*)malloc(gvl*sizeof(char));
-    __builtin_epi_vstore_8xi8(m, mask_array, gvl);
-    
-    for(int i=0; i<gvl; i++){
-        printf("%d", m[i]);
-    }
-    printf("\n\n");
-    free(m);
-}
-
-
-__epi_8xi1 vnot(__epi_8xi1 mask, unsigned int gvl){
-    __epi_8xi8 xor_vector = __builtin_epi_vbroadcast_8xi8(1, gvl);
-    __epi_8xi1 xor_mask = __builtin_epi_cast_8xi1_8xi8(xor_vector);
-
-    return  __builtin_epi_vmxor_8xi1(mask, xor_mask, gvl);
-}
 
 
 
